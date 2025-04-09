@@ -5,6 +5,7 @@ import { chessEngine } from "../service/stockfish.js";
 
 import GameModel, { activeGames } from "../db/models/game.model.js";
 import { io } from "../server.js";
+import { evaluateBoardWithStockfish } from "../utils/colorSwitchManager.js";
 
 // TODO: clean up
 
@@ -302,6 +303,14 @@ export async function sendMove(
       game.pgn = chess.pgn();
       game.turn = chess.turn() === "w" ? "white" : "black"; // update turn
       this.to(game.code as string).emit("receivedMove", m);
+
+        // Evaluate probabilities after the user's move.
+        const fen = chess.fen();
+        const probabilities = await evaluateBoardWithStockfish(fen);
+        console.log("Probabilities after user move:", probabilities);
+
+        // Emit probabilities to the frontend.
+        io.to(game.code as string).emit("probabilitiesUpdated", probabilities);
   
       // Check for game over conditions.
       if (chess.isGameOver()) {
@@ -343,7 +352,14 @@ export async function sendMove(
             game.pgn = chess.pgn();
             game.turn = chess.turn() === "w" ? "black" : "white";
             io.to(game.code as string).emit("receivedMove", aiMoveObj);
-  
+
+            const aiFen = chess.fen();
+            const aiProbabilities = await evaluateBoardWithStockfish(aiFen);
+            console.log("Probabilities after AI move:", aiProbabilities);
+
+            io.to(game.code as string).emit("probabilitiesUpdated", aiProbabilities);
+
+
             if (chess.isGameOver()) {
               console.debug("sendMove: Game over after AI move");
               handleGameOver(game, chess);
@@ -359,3 +375,4 @@ export async function sendMove(
       this.emit("error", "An unexpected error occurred");
     }
   }
+

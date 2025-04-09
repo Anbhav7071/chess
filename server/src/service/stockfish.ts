@@ -17,6 +17,7 @@ interface EngineOptions {
 }
 
 class ChessEngine {
+  private readonly fenHistory: Map<string, number> = new Map();
   private engine: ChildProcess | null = null;
   private ready = false;
   private currentBestMove: string | null = null;
@@ -191,32 +192,87 @@ class ChessEngine {
     return this.currentEvaluation;
   }
 
-  public async getWinProbabilities(fen: string, depth = 15): Promise<{ whiteWinProb: number; blackWinProb: number }> {
+  public async getWinProbabilities(fen: string, depth = 10): Promise<{ whiteWinProb: number; blackWinProb: number }> {
     try {
+      // Evaluate the position using the given FEN and depth
       await this.evaluatePosition({ fen, depth });
       const evaluation = await this.getEvaluation();
-
+  
       if (!evaluation) {
         throw new Error("No evaluation available.");
       }
-
-      let whiteWinProb = 0.5;
-
+  
+      console.debug(`Evaluation received: ${JSON.stringify(evaluation)}`);
+  
+      let whiteWinProb = 0.5; // Default to equal probability
+  
+      // Handle centipawn (cp) evaluation
       if (evaluation.type === "cp") {
-        whiteWinProb = 0.5 + evaluation.value / 1000;
-      } else if (evaluation.type === "mate") {
-        whiteWinProb = evaluation.value > 0 ? 1 : 0;
+        // Use a sigmoid function for centipawn scaling
+        whiteWinProb = 1 / (1 + Math.exp(-evaluation.value / 400));
+      } 
+      // Handle mate evaluation
+      else if (evaluation.type === "mate") {
+        whiteWinProb = evaluation.value > 0 ? 1 : 0; // Mate in X moves means a guaranteed win
       }
-
+  
+      // Clamp the probability between 0 and 1
       whiteWinProb = Math.max(0, Math.min(1, whiteWinProb));
-      const blackWinProb = 1 - whiteWinProb;
-
+      const blackWinProb = 1 - whiteWinProb; // Black's probability is the complement of White's
+  
+      // Check for draw scenarios
+      if (this.isDrawByInsufficientMaterial(fen) || this.isDrawByRepetition(fen) || this.isDrawByFiftyMoveRule(fen)) {
+        console.debug("Draw scenario detected. Setting probabilities to 50% for both sides.");
+        return { whiteWinProb: 0.5, blackWinProb: 0.5 };
+      }
+  
+      console.debug(`Win probabilities calculated: White: ${whiteWinProb}, Black: ${blackWinProb}`);
+  
       return { whiteWinProb, blackWinProb };
     } catch (error) {
       console.error('Error computing win probabilities:', error);
+  
+      // Return default probabilities in case of an error
       return { whiteWinProb: 0.5, blackWinProb: 0.5 };
     }
   }
+
+  private isDrawByInsufficientMaterial(fen: string): boolean {
+    const position = fen.split(" ")[0]; // Extract the board position from the FEN
+    const pieces = position.replace(/\//g, "").replace(/\d/g, ""); // Remove slashes and numbers
+  
+    // Check for insufficient material scenarios
+    const isInsufficient = 
+      pieces === "kK" || // King vs King
+      pieces === "kKb" || pieces === "kBk" || // King and Bishop vs King
+      pieces === "kKn" || pieces === "kNk"; // King and Knight vs King
+  
+    return isInsufficient;
+  }
+
+  private isDrawByRepetition(fen: string): boolean {
+    // This requires tracking the game history and counting identical positions.
+    // For simplicity, assume a method `this.getRepetitionCount(fen)` exists that returns the count of repetitions.
+    const repetitionCount = this.getRepetitionCount(fen);
+    return repetitionCount >= 3;
+  }
+
+  private isDrawByFiftyMoveRule(fen: string): boolean {
+    const halfMoveClock = parseInt(fen.split(" ")[4], 10); // Extract the half-move clock from the FEN
+    return halfMoveClock >= 50;
+  }
+
+
+private getRepetitionCount(fen: string): number {
+  // Get the count of the current FEN from the history
+  return this.fenHistory.get(fen) ?? 0;
+}
+
+private updateFenHistory(fen: string): void {
+  // Increment the count for the current FEN in the history
+  const count = this.fenHistory.get(fen) ?? 0;
+  this.fenHistory.set(fen, count + 1);
+}
 
   private async waitForReady(): Promise<void> {
     if (this.ready) return;
@@ -241,18 +297,28 @@ class ChessEngine {
   private parseEvaluationInfo(info: string): void {
     const parts = info.split(' ');
     const scoreIndex = parts.indexOf('score');
-
-    if (scoreIndex === -1) return;
-
-    const scoreType = parts[scoreIndex + 1];
-    const scoreValue = parseInt(parts[scoreIndex + 2]);
-
+  
+    if (scoreIndex === -1) return; // No score information found
+  
+    const scoreType = parts[scoreIndex + 1]; // 'cp' or 'mate'
+    const scoreValue = parseInt(parts[scoreIndex + 2], 10); // Parse the value after 'cp' or 'mate'
+  
     if ((scoreType === 'cp' || scoreType === 'mate') && !isNaN(scoreValue)) {
       this.currentEvaluation = {
         type: scoreType,
         value: scoreValue,
       };
+  
+      // Log the evaluation, including mate values
+      if (scoreType === 'mate') {
+        console.debug(`Mate detected: Mate in ${scoreValue > 0 ? scoreValue : -scoreValue} moves (${scoreValue > 0 ? 'White' : 'Black'} wins)`);
+      } else if (scoreType === 'cp') {
+        console.debug(`Centipawn evaluation: ${scoreValue}`);
+      }
+  
       console.debug(`Evaluation parsed: ${JSON.stringify(this.currentEvaluation)}`);
+    } else {
+      console.warn(`Unexpected score format in Stockfish response: ${info}`);
     }
   }
 

@@ -51,16 +51,20 @@ export async function attemptSwitch(game: any): Promise<any> {
   return selectedSwitch ? [selectedSwitch] : null;
 }
 
-async function evaluateBoardWithStockfish(fen: string): Promise<{ whiteWinProb: number; blackWinProb: number }> {
+export async function evaluateBoardWithStockfish(fen: string): Promise<{ whiteWinProb: number; blackWinProb: number }> {
   try {
     const { whiteWinProb, blackWinProb } = await chessEngine.getWinProbabilities(fen);
-    return { whiteWinProb, blackWinProb };
+
+    // Normalize the probabilities to 2 decimal places
+    const roundedWhiteWinProb = Math.round(whiteWinProb * 100) / 100;
+    const roundedBlackWinProb = Math.round(blackWinProb * 100) / 100;
+
+    return { whiteWinProb: roundedWhiteWinProb, blackWinProb: roundedBlackWinProb };
   } catch (error) {
     console.error("Error evaluating board with Stockfish:", error);
     return { whiteWinProb: 0.5, blackWinProb: 0.5 };
   }
 }
-
 function getSwitchablePieces(chess: Chess, game: any) {
   const board = chess.board();
   const result: { square: string; piece: any }[] = [];

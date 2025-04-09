@@ -39,12 +39,12 @@ export function initSocket(
         syncSide(user, latestGame, lobby, actions);
         console.log("receivedLatestGame", latestGame);
     });
-    let movecount =0;
+    let movecount = 0;
 
     socket.on("receivedMove", (m: { from: string; to: string; promotion?: string }) => {
         console.log("Attempting to make move:", m);
         const success = actions.makeMove(m);
-        console.log("Move success:", success,movecount++);
+        console.log("Move success:", success, movecount++);
         if (!success) {
             socket.emit("getLatestGame");
         }
@@ -58,82 +58,86 @@ export function initSocket(
  * @param game The chess game instance (chess.js)
  * @returns Updated game instance with switched piece colors
  */
-function processPieceColorSwitch(timeSwitchData: any[], game: any) {
-    // Create a new Chess instance to manipulate
-    const newGame = new Chess(game.fen());
-    
-    // Remove all existing pieces from the squares listed in timeSwitchData
-    timeSwitchData.forEach(item => {
-      const square = item.square;
-      if (newGame.get(square)) {
-        newGame.remove(square);
-      }
-    });
-    
-    // Add the pieces back with swapped colors
-    timeSwitchData.forEach(item => {
-      const square = item.square;
-      const piece = item.piece || {};
-      
-      if (piece.type) {
-        // Swap the color
-        const newColor = piece.color === 'w' ? 'b' : 'w';
-        
-        // Put the piece with the new color
-        newGame.put({ type: piece.type, color: newColor }, square);
-      }
-    });
-    
-    return newGame;
-  }
-  
-  /**
-   * Update the socket handler to use the modified function
-   */
-  socket.on("switchPlayers", ({ white, black, timeSwitchData }: { white: User; black: User; timeSwitchData?: any[] }) => {
-    console.log("Switch players event received:", { white, black, timeSwitchData });
+    function processPieceColorSwitch(timeSwitchData: any[], game: any) {
+        // Create a new Chess instance to manipulate
+        const newGame = new Chess(game.fen());
 
-    // Update the lobby with the new player information
-    actions.updateLobby({
-        type: "updateLobby",
-        payload: { white, black },
-    });
-
-    // Handle the timeSwitchData to swap piece colors
-    let updatedFen: string;
-    if (timeSwitchData && timeSwitchData.length > 0) {
-        console.log("Time-based switch data:", timeSwitchData);
-
-        // Process the specific pieces
-        const updatedGame = processPieceColorSwitch(timeSwitchData, lobby.actualGame);
-        updatedFen = updatedGame.fen();
-        console.log("Updated FEN after piece-specific switch:", updatedFen);
-
-        // Update the chessboard state
-        lobby.actualGame.load(updatedFen);
-        actions.updateLobby({
-            type: "updateLobby",
-            payload: { actualGame: lobby.actualGame },
+        // Remove all existing pieces from the squares listed in timeSwitchData
+        timeSwitchData.forEach(item => {
+            const square = item.square;
+            if (newGame.get(square)) {
+                newGame.remove(square);
+            }
         });
-    } else {
-        // Fallback to general piece color swapping if no specific data
-        console.log("Original FEN:", lobby.actualGame.fen());
-        updatedFen = swapPieceColors(lobby.actualGame.fen());
-        console.log("Updated FEN:", updatedFen);
 
-        // Update the chessboard state
-        lobby.actualGame.load(updatedFen);
-        actions.updateLobby({
-            type: "updateLobby",
-            payload: { actualGame: lobby.actualGame },
+        // Add the pieces back with swapped colors
+        timeSwitchData.forEach(item => {
+            const square = item.square;
+            const piece = item.piece || {};
+
+            if (piece.type) {
+                // Swap the color
+                const newColor = piece.color === 'w' ? 'b' : 'w';
+
+                // Put the piece with the new color
+                newGame.put({ type: piece.type, color: newColor }, square);
+            }
         });
+
+        return newGame;
     }
 
-    // Emit the updated FEN string to the backend
-    socket.emit("updateFen", { fen: updatedFen, gameCode: lobby.code });
+    /**
+     * Update the socket handler to use the modified function
+     */
+    socket.on("switchPlayers", ({ white, black, timeSwitchData }: { white: User; black: User; timeSwitchData?: any[] }) => {
+        console.log("Switch players event received:", { white, black, timeSwitchData });
 
-    console.log("Players switched:", { white, black });
-});
+        // Update the lobby with the new player information
+        actions.updateLobby({
+            type: "updateLobby",
+            payload: { white, black },
+        });
+
+        // Handle the timeSwitchData to swap piece colors
+        let updatedFen: string;
+        if (timeSwitchData && timeSwitchData.length > 0) {
+            console.log("Time-based switch data:", timeSwitchData);
+
+            // Process the specific pieces
+            const updatedGame = processPieceColorSwitch(timeSwitchData, lobby.actualGame);
+            updatedFen = updatedGame.fen();
+            console.log("Updated FEN after piece-specific switch:", updatedFen);
+
+            // Update the chessboard state
+            lobby.actualGame.load(updatedFen);
+            actions.updateLobby({
+                type: "updateLobby",
+                payload: { actualGame: lobby.actualGame },
+            });
+        } else {
+            // Fallback to general piece color swapping if no specific data
+            console.log("Original FEN:", lobby.actualGame.fen());
+            updatedFen = swapPieceColors(lobby.actualGame.fen());
+            console.log("Updated FEN:", updatedFen);
+
+            // Update the chessboard state
+            lobby.actualGame.load(updatedFen);
+            actions.updateLobby({
+                type: "updateLobby",
+                payload: { actualGame: lobby.actualGame },
+            });
+        }
+
+        // Emit the updated FEN string to the backend
+        socket.emit("updateFen", { fen: updatedFen, gameCode: lobby.code });
+
+        console.log("Players switched:", { white, black });
+    });
+
+    socket.on("probabilitiesUpdated", (probabilities: { whiteWinProb: number; blackWinProb: number }) => {
+        console.log("Probabilities updated:", probabilities);
+    })
 
 
     socket.on("userJoinedAsPlayer", ({ name, side }: { name: string; side: "white" | "black" }) => {
