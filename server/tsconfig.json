@@ -1,0 +1,16 @@
+{
+    "compilerOptions": {
+      "target": "ES2021",
+      "module": "NodeNext",
+      "moduleResolution": "NodeNext",
+      "outDir": "./dist",
+      "rootDir": "./src",                    // 👈 Set your source directory
+      "esModuleInterop": true,
+      "forceConsistentCasingInFileNames": true,
+      "strict": true,
+      "skipLibCheck": true
+    },
+    "include": ["src/**/*"],                // 👈 Include all files in `src`
+    "exclude": ["dist", "node_modules"]
+  }
+  
