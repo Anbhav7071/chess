@@ -205,11 +205,11 @@ export const createGame = async (req: Request, res: Response) => {
     activeGames.push(game);
 
     // If time-based switching is enabled, schedule it.
-    if (switchType === "time") {
-      console.debug("Scheduling time-based switch for game:", game.code);
-      // Schedule the switch using the provided configuration.
-      scheduleTimeSwitch(game);
-    }
+    // if (switchType === "time") {
+    //   console.debug("Scheduling time-based switch for game:", game.code);
+    //   // Schedule the switch using the provided configuration.
+    //   scheduleTimeSwitch(game);
+    // }
 
     return res.status(201).json({ code: game.code });
   } catch (err: unknown) {
