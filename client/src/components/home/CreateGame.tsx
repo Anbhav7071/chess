@@ -12,9 +12,11 @@ export default function CreateGame() {
   const [buttonLoading, setButtonLoading] = useState(false);
   const [gameType, setGameType] = useState("user");
   const [isAI, setIsAI] = useState(false);
-  const [switchType, setSwitchType] = useState<"move" | "time" | "player" | "random">("move");
+  const [switchType, setSwitchType] = useState<"move" | "time" | "player" | null>(null);
   const [movePoints, setMovePoints] = useState("10,20,30");
   const [timeInterval, setTimeInterval] = useState("30"); // in seconds
+  const [gameTimerType, setGameTimerType] = useState<"time-based" | "infinite">("time-based");
+  const [totalTimePerPlayer, setTotalTimePerPlayer] = useState("10"); // in minutes
 
   const router = useRouter();
 
@@ -36,19 +38,24 @@ export default function CreateGame() {
       switchConfig.interval = parseInt(timeInterval, 10);
     }
 
-    const game = await createGame({
-      side: startingSide as "white" | "black" | "random",
-      unlisted,
-      isAIGame: isAI,
-      switchType,
-      switchConfig,
-    });
+    try {
+      const response = await createGame({
+        unlisted,
+        isAIGame: isAI,
+        side: startingSide as "white" | "black" | "random",
+        switchType,
+        switchConfig,
+        totalTimePerPlayer: gameTimerType === "time-based" ? parseInt(totalTimePerPlayer, 10) : undefined,
+      });
 
-    if (game) {
-      router.push(`/${game.code}`);
-    } else {
+      if (response?.code) {
+        router.push(`/${response.code}`);
+      } else {
+        setButtonLoading(false);
+      }
+    } catch (error) {
+      console.error("Error creating game:", error);
       setButtonLoading(false);
-      // TODO: Show error message
     }
   }
 
@@ -103,20 +110,51 @@ export default function CreateGame() {
         <option value="black">Black</option>
       </select>
 
+      {/* Timer Type */}
+      <label className="label">
+        <span className="label-text">Game Timer Type</span>
+      </label>
+      <select
+        className="select select-bordered"
+        value={gameTimerType}
+        onChange={(e) => setGameTimerType(e.target.value as any)}
+      >
+        <option value="time-based">Time-Based</option>
+        <option value="infinite">Infinite</option>
+      </select>
+
+      {gameTimerType === "time-based" && (
+        <div>
+          <label className="label-text">Total Time Per Player (in minutes):</label>
+          <input
+            type="number"
+            className="input input-bordered"
+            value={totalTimePerPlayer}
+            onChange={(e) => setTotalTimePerPlayer(e.target.value)}
+            min={1}
+          />
+        </div>
+      )}
+
       {/* Color Switching Logic */}
       <label className="label">
         <span className="label-text">Switch Type</span>
       </label>
       <select
         className="select select-bordered"
-        value={switchType}
-        onChange={(e) => setSwitchType(e.target.value as any)}
+        value={switchType ?? ""}
+        onChange={(e) =>
+          setSwitchType(
+            e.target.value === "" ? null : (e.target.value as "move" | "time" | "player")
+          )
+        }
       >
+        <option value="">Select switch type</option>
         <option value="move">Move-Based</option>
         <option value="time">Time-Based</option>
         <option value="player">Player-Triggered</option>
-        <option value="random">Random</option>
       </select>
+
 
       {/* Conditionally show configs */}
       {switchType === "move" && (

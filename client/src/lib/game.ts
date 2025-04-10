@@ -28,12 +28,18 @@ interface SwitchConfig {
     interval?: number;
   }
   
+  interface SwitchConfig {
+    points?: number[]; // Used for move-based switching
+    interval?: number; // Used for time-based switching
+  }
+  
   interface CreateGamePayload {
-    side: "white" | "black" | "random";
-    unlisted: boolean;
-    isAIGame: boolean;
-    switchType: "move" | "time" | "player" | "random";
-    switchConfig: SwitchConfig;
+    unlisted: boolean; // Whether the game is unlisted
+    isAIGame: boolean; // Whether the game is against AI
+    side: "white" | "black" | "random"; // Starting side
+    switchType: "move" | "time" | "player" | null; // Type of switching
+    switchConfig: SwitchConfig; // Configuration for switching
+    totalTimePerPlayer?: number; // Optional for infinite games
   }
   
   export const createGame = async (payload: CreateGamePayload) => {

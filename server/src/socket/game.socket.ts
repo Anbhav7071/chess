@@ -258,6 +258,7 @@ export async function chat(this: Socket, message: string) {
         message
     });
 }
+
 export async function sendMove(this: Socket, m: { from: string; to: string; promotion?: string }) {
     try {
       const game = findActiveGame(this);
@@ -268,10 +269,42 @@ export async function sendMove(this: Socket, m: { from: string; to: string; prom
       const chess = initializeGame(game);
       if (!isUserTurn(this, game, chess)) return emitError(this, "Not your turn to move");
   
+      // Determine player making the move BEFORE move is applied
+      const movingColor = chess.turn() === "w" ? "white" : "black";
+  
+      // Timer logic (only if totalTimePerPlayer is defined)
+      if (game.totalTimePerPlayer !== undefined) {
+        const now = Date.now();
+        const timeSpent = now - (game.lastMoveTimestamp ?? now);
+  
+        const timeKey = movingColor === "white" ? "whiteTimeLeft" : "blackTimeLeft";
+        const spentKey = movingColor === "white" ? "whiteTimeSpent" : "blackTimeSpent";
+        
+        game[timeKey] = Math.max(0, (game[timeKey] ?? game.totalTimePerPlayer) - timeSpent);
+        game[spentKey] = (game[spentKey] ?? 0) + timeSpent;
+  
+        if (game[timeKey]! <= 0) {
+          game.isOver = true;
+          game.result = `${movingColor === "white" ? "black" : "white"} wins by timeout`;
+          game.endedAt = new Date();
+        
+          this.to(game.code!).emit("gameOver", {
+            reason: "timeout",
+            winner: game.result,
+          });
+          
+          return;
+        }
+      }
+  
+      // Now make the move
       const newMove = chess.move(m);
       if (!newMove) return emitError(this, "Invalid move");
   
+      // Update game state
       updateGameState(game, chess);
+      game.lastMoveTimestamp = Date.now();
+  
       this.to(game.code as string).emit("receivedMove", m);
   
       await emitProbabilities(game.code!, chess.fen());
@@ -284,11 +317,13 @@ export async function sendMove(this: Socket, m: { from: string; to: string; prom
       if (game.isAIGame) {
         await handleAIMove(this, game, chess);
       }
+  
     } catch (e) {
       console.error("sendMove: Unexpected error", e);
       emitError(this, "An unexpected error occurred");
     }
   }
+  
   
   function findActiveGame(socket: Socket) {
     const roomCode = Array.from(socket.rooms)[1];

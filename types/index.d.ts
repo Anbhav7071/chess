@@ -11,13 +11,23 @@ export interface Game {
     timeout?: number;
     observers?: User[];
     startedAt?: number;
-    endedAt?: number;
+    endedAt?: number | Date;
     isAIGame?: boolean;
     turn?: "white" | "black";
-    switchType?: "move" | "time" | "player" | "random";
+    switchType?: "move" | "time" | "player" | null;
     switchConfig?: any;
-    tokens?: { white: number; black: number };
-    switchPoints?: number[];  
+    tokens: {
+        white: number;
+        black: number;
+      };
+    totalTimePerPlayer?: number; // if undefined/null => untimed game
+    whiteTimeLeft?: number;
+    blackTimeLeft?: number;
+    whiteTimeSpent?: number; // total elapsed time spent by white
+    blackTimeSpent?: number; // total elapsed time spent by black
+    lastMoveTimestamp?: number;
+    result?: string;         // E.g., "white wins by timeout"
+    isOver?: boolean;        // Optional: use to mark game over
 }
 export interface User {
     id?: number | string; // string for guest IDs
