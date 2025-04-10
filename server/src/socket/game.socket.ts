@@ -258,121 +258,135 @@ export async function chat(this: Socket, message: string) {
         message
     });
 }
-export async function sendMove(
-    this: Socket,
-    m: { from: string; to: string; promotion?: string }
-  ) {
+export async function sendMove(this: Socket, m: { from: string; to: string; promotion?: string }) {
     try {
-      // Find the active game.
-      const game = activeGames.find((g) => g.code === Array.from(this.rooms)[1]);
-      if (!game) {
-        console.error("sendMove: Game not found");
-        this.emit("error", "Game not found");
-        return;
-      }
-      console.debug("sendMove: Game found", game.code);
+      const game = findActiveGame(this);
+      if (!game) return emitError(this, "Game not found");
   
-      if (game.endReason || game.winner) {
-        console.error("sendMove: Game is already over");
-        this.emit("error", "Game is already over");
-        return;
-      }
+      if (isGameOver(game)) return emitError(this, "Game is already over");
   
-      const chess = new Chess();
-      if (game.pgn) chess.loadPgn(game.pgn);
-  
-      const currentTurn = chess.turn(); // 'w' or 'b'
-      const isUserTurn =
-        (currentTurn === "w" && this.request.session.user?.id === game.white?.id) ||
-        (currentTurn === "b" && this.request.session.user?.id === game.black?.id);
-  
-      if (!isUserTurn) {
-        console.error("sendMove: Not the user's turn");
-        this.emit("error", "Not your turn to move");
-        return;
-      }
+      const chess = initializeGame(game);
+      if (!isUserTurn(this, game, chess)) return emitError(this, "Not your turn to move");
   
       const newMove = chess.move(m);
-      if (!newMove) {
-        console.error("sendMove---: Invalid move", m);
-        this.emit("error", "Invalid move");
-        return;
-      }
+      if (!newMove) return emitError(this, "Invalid move");
   
-      // Update game state.
-      game.pgn = chess.pgn();
-      game.turn = chess.turn() === "w" ? "white" : "black"; // update turn
+      updateGameState(game, chess);
       this.to(game.code as string).emit("receivedMove", m);
-
-        // Evaluate probabilities after the user's move.
-        const fen = chess.fen();
-        const probabilities = await evaluateBoardWithStockfish(fen);
-        console.log("Probabilities after user move:", probabilities);
-
-        // Emit probabilities to the frontend.
-        io.to(game.code as string).emit("probabilitiesUpdated", probabilities);
   
-      // Check for game over conditions.
+      await emitProbabilities(game.code!, chess.fen());
+  
       if (chess.isGameOver()) {
-        console.debug("sendMove: Game over detected");
         handleGameOver(game, chess);
         return;
       }
   
-      // Handle AI move if applicable.
       if (game.isAIGame) {
-        const isAiWhite = game.white?.id === -1;
-        const isAiBlack = game.black?.id === -1;
-        const isAiTurn =
-          (isAiWhite && chess.turn() === "w") ||
-          (isAiBlack && chess.turn() === "b");
-  
-        if (isAiTurn) {
-          try {
-            const aiMove = await chessEngine.getBestMove({
-              fen: chess.fen(),
-              depth: 15,
-            });
-            if (!aiMove || aiMove.length < 4) {
-              console.error("AI move is invalid or incomplete:", aiMove);
-              this.emit("error", "AI move is invalid");
-              return;
-            }
-            const aiMoveObj = {
-              from: aiMove.slice(0, 2),
-              to: aiMove.slice(2, 4),
-              promotion: aiMove.length > 4 ? aiMove[4] : undefined,
-            };
-            const aiNewMove = chess.move(aiMoveObj);
-            if (!aiNewMove) {
-              console.error("sendMove: AI made an invalid move", aiMoveObj);
-              this.emit("error", "AI made an invalid move");
-              return;
-            }
-            game.pgn = chess.pgn();
-            game.turn = chess.turn() === "w" ? "black" : "white";
-            io.to(game.code as string).emit("receivedMove", aiMoveObj);
-
-            const aiFen = chess.fen();
-            const aiProbabilities = await evaluateBoardWithStockfish(aiFen);
-            console.log("Probabilities after AI move:", aiProbabilities);
-
-            io.to(game.code as string).emit("probabilitiesUpdated", aiProbabilities);
-
-
-            if (chess.isGameOver()) {
-              console.debug("sendMove: Game over after AI move");
-              handleGameOver(game, chess);
-            }
-          } catch (error) {
-            console.error("sendMove: Error during AI move calculation", error);
-            this.emit("error", "Error during AI move calculation");
-          }
-        }
+        await handleAIMove(this, game, chess);
       }
     } catch (e) {
       console.error("sendMove: Unexpected error", e);
-      this.emit("error", "An unexpected error occurred");
+      emitError(this, "An unexpected error occurred");
     }
   }
+  
+  function findActiveGame(socket: Socket) {
+    const roomCode = Array.from(socket.rooms)[1];
+    const game = activeGames.find((g) => g.code === roomCode);
+    if (!game) {
+      console.error("sendMove: Game not found");
+    } else {
+      console.debug("sendMove: Game found", game.code);
+    }
+    return game;
+  }
+  
+  function isGameOver(game: any): boolean {
+    return !!(game.endReason || game.winner);
+  }
+  
+  function initializeGame(game: any) {
+    const chess = new Chess();
+    if (game.pgn) {
+      chess.loadPgn(game.pgn);
+    }
+    return chess;
+  }
+  
+  function isUserTurn(socket: Socket, game: any, chess: Chess): boolean {
+    const currentTurn = chess.turn(); // 'w' or 'b'
+    const userId = socket.request.session.user?.id;
+    const isUserTurn =
+      (currentTurn === "w" && userId === game.white?.id) ||
+      (currentTurn === "b" && userId === game.black?.id);
+  
+    if (!isUserTurn) {
+      console.error("sendMove: Not the user's turn");
+    }
+  
+    return isUserTurn;
+  }
+  
+  function updateGameState(game: any, chess: Chess) {
+    game.pgn = chess.pgn();
+    game.turn = chess.turn() === "w" ? "white" : "black";
+  }
+  
+  async function emitProbabilities(roomCode: string, fen: string) {
+    const probabilities = await evaluateBoardWithStockfish(fen);
+    console.log("Probabilities updated:", probabilities);
+    io.to(roomCode).emit("probabilitiesUpdated", probabilities);
+  }
+  
+  async function handleAIMove(socket: Socket, game: any, chess: Chess) {
+    const isAiWhite = game.white?.id === -1;
+    const isAiBlack = game.black?.id === -1;
+    const isAiTurn =
+      (isAiWhite && chess.turn() === "w") ||
+      (isAiBlack && chess.turn() === "b");
+  
+    if (!isAiTurn) return;
+  
+    try {
+      const aiMove = await chessEngine.getBestMove({
+        fen: chess.fen(),
+        depth: 15,
+      });
+  
+      if (!aiMove || aiMove.length < 4) {
+        console.error("AI move is invalid or incomplete:", aiMove);
+        return emitError(socket, "AI move is invalid");
+      }
+  
+      const aiMoveObj = {
+        from: aiMove.slice(0, 2),
+        to: aiMove.slice(2, 4),
+        promotion: aiMove.length > 4 ? aiMove[4] : undefined,
+      };
+  
+      const aiNewMove = chess.move(aiMoveObj);
+      if (!aiNewMove) {
+        console.error("sendMove: AI made an invalid move", aiMoveObj);
+        return emitError(socket, "AI made an invalid move");
+      }
+  
+      updateGameState(game, chess);
+      io.to(game.code as string).emit("receivedMove", aiMoveObj);
+  
+      await emitProbabilities(game.code, chess.fen());
+  
+      if (chess.isGameOver()) {
+        console.debug("sendMove: Game over after AI move");
+        handleGameOver(game, chess);
+      }
+    } catch (error) {
+      console.error("sendMove: Error during AI move calculation", error);
+      emitError(socket, "Error during AI move calculation");
+    }
+  }
+  
+  function emitError(socket: Socket, message: string) {
+    socket.emit("error", message);
+  }
+  
 
