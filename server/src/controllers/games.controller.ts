@@ -5,7 +5,14 @@ import { chessEngine } from "../service/stockfish.js";
 import { Chess } from "chess.js";
 import GameModel, { activeGames } from "../db/models/game.model.js";
 import { io } from "../server.js";
-import { scheduleTimeSwitch } from "../utils/eventScheduler.js";
+
+type SwitchType = "move" | "time" | "player" | null;
+
+interface SwitchConfig {
+  points?: number[];     // Used for move-based
+  interval?: number;     // Used for time-based
+}
+
 
 export const getGames = async (req: Request, res: Response) => {
   try {
@@ -65,155 +72,130 @@ export const getActiveGame = async (req: Request, res: Response) => {
   }
 };
 
+// Helper: Extract authenticated user from session
+function getAuthenticatedUser(req: Request): User | null {
+  const sessionUser = req.session?.user;
+  if (!sessionUser?.id) return null;
+  return {
+    id: sessionUser.id,
+    name: sessionUser.name,
+    connected: false,
+  };
+}
+
+// Helper: Validate and determine switchType
+function parseSwitchType(raw: any): SwitchType {
+  const allowed: SwitchType[] = ["move", "time", "player"];
+  return allowed.includes(raw) ? raw : null;
+}
+
+// Helper: Setup switch points based on switchType and config
+function setupSwitchPoints(type: SwitchType, config: SwitchConfig): number[] | undefined {
+  if (type === "move") {
+    return config.points ?? [10];
+  } else if (type === "time") {
+    if (typeof config.interval === "number") {
+      return [config.interval];
+    } else {
+      throw new Error("Missing interval for time-based switching.");
+    }
+  } else {
+    return undefined;
+  }
+}
+
+// Helper: Assign players based on AI game or not
+function assignPlayers(game: Game, user: User, side: "white" | "black"): void {
+  const ai: User = { id: -1, name: "Stockfish AI", connected: true };
+  game[side] = user;
+  game[side === "white" ? "black" : "white"] = game.isAIGame ? ai : undefined;
+}
+
+// Main controller
 export const createGame = async (req: Request, res: Response) => {
   try {
     console.log("Request Body:", req.body);
-    // Ensure the user is authenticated
-    if (!req.session.user?.id) {
-      console.log("Unauthorized createGame request");
+
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      console.warn("Unauthorized createGame request");
       return res.status(401).end();
     }
 
-    // Extract user information
-    const user: User = {
-      id: req.session.user.id,
-      name: req.session.user.name,
-      connected: false,
-    };
-    console.log("User:", user);
-    // Extract game options from request body
     const unlisted: boolean = req.body.unlisted ?? false;
     const isAIGame: boolean = req.body.isAIGame ?? false;
-    const userSide =
-      req.body.side === "black"
-        ? "black"
-        : req.body.side === "white"
-        ? "white"
-        : "random";
+    const userSide: "white" | "black" = req.body.side === "black" ? "black" : "white";
 
-    // NEW: Extract color switching configuration.
-    // Expected switchType values: 'move', 'time', 'player', or 'random'
-    const switchType: "move" | "time" | "player" | "random" =
-      req.body.switchType || "move";
-    const switchConfig = req.body.switchConfig || {};
-    // Default tokens: Each player gets three tokens to prevent a switch.
+    const rawSwitchType = req.body.switchType;
+    const switchType: SwitchType = parseSwitchType(rawSwitchType);
+    const switchConfig: SwitchConfig = req.body.switchConfig ?? {};
+
+    // Handle total time (optional)
+    const totalTimeMinutes: number | undefined = req.body.totalTimePerPlayer;
+    const totalTime: number | undefined = typeof totalTimeMinutes === "number"
+      ? totalTimeMinutes * 60 * 1000
+      : undefined;
+
+    // Timer & token setup
+    const now = Date.now();
     const tokens = { white: 3, black: 3 };
 
-    console.debug("Is AI Game:", isAIGame);
-    console.debug("User Side:", userSide);
-    console.debug("Switch Type:", switchType, "Switch Config:", switchConfig);
-
-    // Initialize the game object with new switching parameters.
     const game: Game = {
-      code: nanoid(6),
+      code: nanoid(10),
       unlisted,
       host: user,
-      pgn: "",
       isAIGame,
-      turn: "white", // White always moves first
+      turn: "white",
+      pgn: "",
       switchType,
       switchConfig,
       tokens,
-      // For move-based switching: if not provided, default to first switch at move 10.
-      switchPoints:
-        switchType === "move"
-          ? switchConfig.points || [10]
-          : switchType === "random"
-          ? [] // will be generated below
-          : undefined,
+
+      totalTimePerPlayer: totalTime, // could be undefined
+      whiteTimeLeft: totalTime ?? undefined,
+      blackTimeLeft: totalTime ?? undefined,
+
+      whiteTimeSpent: 0,
+      blackTimeSpent: 0,
+
+      lastMoveTimestamp: now,
     };
 
-    // For random variant: Generate three random move numbers in specified ranges.
-    if (switchType === "random") {
-      const randomPoint = (min: number, max: number) =>
-        Math.floor(Math.random() * (max - min + 1)) + min;
-      game.switchPoints = [
-        randomPoint(10, 20),
-        randomPoint(21, 40),
-        randomPoint(41, 60),
-      ];
-    }
-    console.debug("Switch Points:", game.switchPoints);
-    console.debug("Switch Config:", game.switchConfig);
-    console.debug("Switch Type:", game.switchType);
-    console.debug("Tokens:", game.tokens);
-    console.debug("Game Code:", game);
-    // Setup AI game if applicable.
-    if (isAIGame) {
-      if (userSide === "random") {
-        // Randomly assign user to white or black.
-        game.white =
-          Math.random() < 0.5
-            ? user
-            : {
-                id: -1,
-                name: "Stockfish AI",
-                connected: true,
-              };
-        game.black =
-          game.white.id === -1
-            ? user
-            : {
-                id: -1,
-                name: "Stockfish AI",
-                connected: true,
-              };
-      } else {
-        // Assign user to chosen side; AI to the opposite.
-        game[userSide] = user;
-        game[userSide === "white" ? "black" : "white"] = {
-          id: -1,
-          name: "Stockfish AI",
-          connected: true,
+    assignPlayers(game, user, userSide);
+
+    // Handle AI first move
+    if (isAIGame && game.turn === "white" && game.white?.id === -1) {
+      const chess = new Chess();
+      try {
+        const aiMove = await chessEngine.getBestMove({
+          fen: chess.fen(),
+          depth: 15,
+        });
+
+        const aiMoveObj = {
+          from: aiMove.slice(0, 2),
+          to: aiMove.slice(2, 4),
+          promotion: aiMove.length > 4 ? aiMove[4] : undefined,
         };
-      }
 
-      // If AI is white, make the first move immediately.
-      if (game.turn === "white" && game.white?.id === -1) {
-        const chess = new Chess();
-        try {
-          const aiMove = await chessEngine.getBestMove({
-            fen: chess.fen(), // Starting position
-            depth: 15,
-          });
-          const aiMoveObj = {
-            from: aiMove.slice(0, 2),
-            to: aiMove.slice(2, 4),
-            promotion: aiMove.length > 4 ? aiMove[4] : undefined,
-          };
-          chess.move(aiMoveObj);
-          game.pgn = chess.pgn();
-          game.turn = "black"; // User's turn next
-          console.debug("AI made the first move:", aiMoveObj);
-          io.to(game.code!).emit("receivedMove", aiMoveObj);
-        } catch (error) {
-          console.error("Error making AI's first move:", error);
-        }
-      }
-    } else {
-      // Human vs Human game setup.
-      if (userSide === "random") {
-        game.white = Math.random() < 0.5 ? user : undefined;
-        game.black = game.white ? undefined : user;
-      } else {
-        game[userSide] = user;
+        chess.move(aiMoveObj);
+        game.pgn = chess.pgn();
+        game.turn = "black";
+
+        game.lastMoveTimestamp = Date.now(); // Update after AI move
+        io.to(game.code!).emit("receivedMove", aiMoveObj);
+        console.debug("AI made the first move:", aiMoveObj);
+      } catch (error) {
+        console.error("Error making AI move:", error);
       }
     }
 
-    // Push the game to active games.
-    console.debug("Game created:", game);
     activeGames.push(game);
-
-    // If time-based switching is enabled, schedule it.
-    // if (switchType === "time") {
-    //   console.debug("Scheduling time-based switch for game:", game.code);
-    //   // Schedule the switch using the provided configuration.
-    //   scheduleTimeSwitch(game);
-    // }
-
+    console.info("Game created successfully:", game.code);
     return res.status(201).json({ code: game.code });
-  } catch (err: unknown) {
-    console.error("Error creating game:", err);
+
+  } catch (err) {
+    console.error("Unexpected error in createGame:", err);
     return res.status(500).end();
   }
 };
